@@ -183,11 +183,11 @@ def function_call_output(arg, item_id, call_id):
 
 if __name__ == "__main__":
     print('running the server')
-    # client = plivo.RestClient(auth_id=os.getenv('PLIVO_AUTH_ID'), auth_token=os.getenv('PLIVO_AUTH_TOKEN'))
-    # call_made = client.calls.create(
-    #     from_=os.getenv('PLIVO_FROM_NUMBER'),
-    #     to_=os.getenv('PLIVO_TO_NUMBER'),
-    #     answer_url=os.getenv('PLIVO_ANSWER_XML'),
-    #     answer_method='GET',)
+    client = plivo.RestClient(auth_id=os.getenv('PLIVO_AUTH_ID'), auth_token=os.getenv('PLIVO_AUTH_TOKEN'))
+    call_made = client.calls.create(
+        from_=os.getenv('PLIVO_FROM_NUMBER'),
+        to_=os.getenv('PLIVO_TO_NUMBER'),
+        answer_url=os.getenv('PLIVO_ANSWER_XML'),
+        answer_method='GET',)
     app.run(port=PORT)
     

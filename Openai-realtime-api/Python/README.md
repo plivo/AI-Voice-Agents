@@ -34,7 +34,7 @@ Once the tunnel has been opened, copy the `Forwarding` URL. It will look somethi
 need this when creating the Plivo Answer XML.
 
 Note that the `ngrok` command above forwards to a development server running on port `5000`, which is the default port configured in this application. If
-you override the `PORT` defined in `index.js`, you will need to update the `ngrok` command accordingly.
+you override the `PORT` defined in `server.py`, you will need to update the `ngrok` command accordingly.
 
 Keep in mind that each time you run the `ngrok http` command, a new URL will be created, and you'll need to update it everywhere it is referenced below.
 
