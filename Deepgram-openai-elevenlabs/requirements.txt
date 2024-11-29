@@ -1,0 +1,14 @@
+plivo
+asyncio==3.4.3
+base64
+json
+sys
+webrtcvad==2.0.10
+websockets==12.0
+deepgram-sdk==2.12.0
+numpy==1.24.2
+wave
+openai==0.27.4
+elevenlabs==1.7.0
+io
+traceback
