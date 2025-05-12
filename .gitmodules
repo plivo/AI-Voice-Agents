@@ -1,0 +1,6 @@
+[submodule "Google-live-api/Google-Live-API-Python"]
+	path = Google-live-api/Google-Live-API-Python
+	url = https://github.com/plivo/Google-Live-API-Python.git
+[submodule "Google-live-api/Google-Live-API-NodeJS"]
+	path = Google-live-api/Google-Live-API-NodeJS
+	url = https://github.com/plivo/Google-Live-API-NodeJS.git
