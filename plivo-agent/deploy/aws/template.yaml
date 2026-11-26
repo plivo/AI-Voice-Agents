@@ -1,0 +1,257 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  A plivo-agent phone agent on AWS: one Fargate task behind CloudFront and an internal Application Load Balancer.
+  Set your Plivo number's answer URL to the AnswerUrl output when the stack is complete.
+
+Parameters:
+  Image:
+    Type: String
+    MinLength: 1
+    Description: The agent image, built from this repository's Dockerfile and pushed to a registry the task can pull from, such as ECR.
+  Architecture:
+    Type: String
+    Default: ARM64
+    AllowedValues: [ARM64, X86_64]
+    Description: The CPU the image was built for. An image built on Apple Silicon is ARM64.
+  PlivoAuthToken:
+    Type: String
+    NoEcho: true
+    MinLength: 1
+    Description: Your Plivo auth token (PLIVO_AUTH_TOKEN). It proves a request comes from Plivo.
+  # The three model keys the example agent reads. For other providers, rename them here and in Keys and Task below.
+  DeepgramApiKey:
+    Type: String
+    NoEcho: true
+    MinLength: 1
+  OpenAiApiKey:
+    Type: String
+    NoEcho: true
+    MinLength: 1
+  CartesiaApiKey:
+    Type: String
+    NoEcho: true
+    MinLength: 1
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: !Ref AWS::StackName }]
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  SubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.0.0/20
+      AvailabilityZone: !Select [0, !GetAZs ""]
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.16.0/20
+      AvailabilityZone: !Select [1, !GetAZs ""]
+  SubnetARoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetA
+      RouteTableId: !Ref RouteTable
+  SubnetBRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetB
+      RouteTableId: !Ref RouteTable
+  # Private: with no association they take the VPC's main route table, which has no route to the internet.
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.32.0/20
+      AvailabilityZone: !Select [0, !GetAZs ""]
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.48.0/20
+      AvailabilityZone: !Select [1, !GetAZs ""]
+
+  ServiceGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: The load balancer to the agent
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 8000, ToPort: 8000, SourceSecurityGroupId: !Ref LoadBalancerGroup }
+  # The load balancer has no public address and no route from the internet, so only the CloudFront VPC origin reaches port 80.
+  LoadBalancerGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: The CloudFront VPC origin to the load balancer
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internal
+      Subnets: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      SecurityGroups: [!Ref LoadBalancerGroup]
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref Vpc
+      TargetType: ip
+      Protocol: HTTP
+      Port: 8000
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      TargetGroupAttributes:
+        - { Key: deregistration_delay.timeout_seconds, Value: "10" }
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+  VpcOrigin:
+    Type: AWS::CloudFront::VpcOrigin
+    # A VPC origin needs an internet gateway attached to its VPC, though no traffic routes through it.
+    DependsOn: GatewayAttachment
+    Properties:
+      VpcOriginEndpointConfig:
+        Name: !Sub "${AWS::StackName}-${AWS::Region}"
+        Arn: !Ref LoadBalancer
+        OriginProtocolPolicy: http-only
+  # CloudFront's own address gives the agent HTTPS and secure WebSockets with no domain or certificate to manage.
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Ref AWS::StackName
+        Origins:
+          - Id: alb
+            DomainName: !GetAtt LoadBalancer.DNSName
+            VpcOriginConfig:
+              VpcOriginId: !GetAtt VpcOrigin.Id
+        DefaultCacheBehavior:
+          TargetOriginId: alb
+          ViewerProtocolPolicy: https-only
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          Compress: false
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # CachingDisabled
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3 # AllViewer: Plivo's signature headers reach the agent
+
+  Keys:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      SecretString: !Sub >-
+        {"PLIVO_AUTH_TOKEN": "${PlivoAuthToken}", "DEEPGRAM_API_KEY": "${DeepgramApiKey}",
+        "OPENAI_API_KEY": "${OpenAiApiKey}", "CARTESIA_API_KEY": "${CartesiaApiKey}"}
+  Cluster:
+    Type: AWS::ECS::Cluster
+  Logs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 30
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: secrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref Keys
+  Task:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "1024"
+      Memory: "2048"
+      RuntimePlatform: { CpuArchitecture: !Ref Architecture, OperatingSystemFamily: LINUX }
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: agent
+          Image: !Ref Image
+          Essential: true
+          PortMappings:
+            - { ContainerPort: 8000, Protocol: tcp }
+          Environment:
+            - { Name: PUBLIC_URL, Value: !Sub "https://${Distribution.DomainName}" }
+            - { Name: PORT, Value: "8000" }
+          Secrets:
+            - { Name: PLIVO_AUTH_TOKEN, ValueFrom: !Sub "${Keys}:PLIVO_AUTH_TOKEN::" }
+            - { Name: DEEPGRAM_API_KEY, ValueFrom: !Sub "${Keys}:DEEPGRAM_API_KEY::" }
+            - { Name: OPENAI_API_KEY, ValueFrom: !Sub "${Keys}:OPENAI_API_KEY::" }
+            - { Name: CARTESIA_API_KEY, ValueFrom: !Sub "${Keys}:CARTESIA_API_KEY::" }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref Logs
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: agent
+  Service:
+    Type: AWS::ECS::Service
+    # The task pulls its image, reads its secrets and reaches its model providers over the public subnets' route to the internet.
+    DependsOn: [Listener, DefaultRoute, SubnetARoutes, SubnetBRoutes]
+    Properties:
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref Task
+      LaunchType: FARGATE
+      DesiredCount: 1
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker: { Enable: true, Rollback: true }
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: [!Ref SubnetA, !Ref SubnetB]
+          SecurityGroups: [!Ref ServiceGroup]
+      LoadBalancers:
+        - { ContainerName: agent, ContainerPort: 8000, TargetGroupArn: !Ref TargetGroup }
+
+Outputs:
+  AnswerUrl:
+    Description: Set your Plivo number's answer URL to this, method POST.
+    Value: !Sub "https://${Distribution.DomainName}/answer"
+  LogGroup:
+    Description: The CloudWatch log group with the agent's logs.
+    Value: !Ref Logs

@@ -1,0 +1,22 @@
+# The Deploy to Render button for plivo-agent reads this Blueprint: plivo-agent/docs/deploy.md#render.
+services:
+  - type: web
+    name: plivo-agent
+    runtime: docker
+    dockerfilePath: ./plivo-agent/Dockerfile
+    dockerContext: ./plivo-agent
+    # The free plan sleeps after 15 quiet minutes, and a sleeping agent misses the call.
+    plan: starter
+    autoDeployTrigger: "off"
+    healthCheckPath: /health
+    # Render names the service's own address in RENDER_EXTERNAL_URL only once it runs.
+    dockerCommand: sh -c 'PUBLIC_URL=$RENDER_EXTERNAL_URL exec python agent.py'
+    envVars:
+      - key: PLIVO_AUTH_TOKEN
+        sync: false
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: CARTESIA_API_KEY
+        sync: false

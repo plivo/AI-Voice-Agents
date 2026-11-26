@@ -1,0 +1,35 @@
+name: plivo-agent CI
+
+on:
+  pull_request:
+    paths: [plivo-agent/**, render.yaml, .github/workflows/plivo-agent-*.yml]
+  push:
+    branches: [main]
+    paths: [plivo-agent/**, render.yaml, .github/workflows/plivo-agent-*.yml]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: plivo-agent
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --python ${{ matrix.python }}
+      - run: uv run pytest
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uvx ruff check . && uvx ruff format --check .
+      - run: uvx cfn-lint deploy/aws/template.yaml
+      - run: docker build -t plivo-agent .
