@@ -1,0 +1,28 @@
+name: Publish plivo-agent to PyPI
+
+on:
+  release:
+    types: [published]
+
+defaults:
+  run:
+    working-directory: plivo-agent
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # PyPI trusted publishing: no stored token
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: The release tag is the version in pyproject.toml
+        run: test "$GITHUB_REF_NAME" = "v$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+      - run: uv sync
+      - run: uv run pytest
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: plivo-agent/dist
